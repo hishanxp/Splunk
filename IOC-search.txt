@@ -1,0 +1,52 @@
+iOC Hunting/Search - Experimental
+
+SQli
+index=* sourcetype="ms:iis:default" NOT ("cookie.js" OR "script.js" OR "cookie-min.js" OR "RESET-COOKIE" OR "form.user-info-from-cookie") AND (“&#” OR "script>" OR "script%3E" OR "`" OR "cookie" OR alert\( OR "</" OR "@@" OR "%40%40" OR "<scr" OR "%3Cscr" OR "<" OR "%3C%2F" OR "..%2F" OR ".." OR "%2E%2E") uri_query!="-" uri_query!="utm_*"| table _time, clientip, status, uri_query | sort by _time desc
+
+
+#Splunk Search for Postfix messages sent over time
+sourcetype=postfix_syslog status=sent | timechart span=1d count
+
+#Splunk Search for Failed linux logins by user
+sourcetype=linux_secure tag=authentication action=failure | stats count by user | sort - count
+
+#Splunk Search for Successful linux logins over time
+sourcetype=linux_secure tag=authentication action=success | timechart count by src
+
+Splunk Search for Successful linux logins by source IP
+sourcetype=linux_secure tag=authentication action=success | stats values(user) as user, count by src
+
+Splunk Search for Failed linux logins by source IP
+sourcetype=linux_secure tag=authentication action=failure | stats values(user) as user, count by src
+
+Splunk Search for List of linux users who escalated privileges
+sourcetype=linux_secure "su: " OR "sudo: " | eval Date=strftime(_time, "%Y/%m/%d") | rex "\w{3}\s\d{2}\s\d{2}:\d{2}:\d{2}\s(?<hostname>\S+)" | regex _raw="\suser\sroot\sby" | rex "\suser\sroot\sby\s(?<user>\w+)" | stats count by user, host
+
+Splunk Search for Hosts where root user activity was identified
+sourcetype=linux_secure | rex "\w{3}\s\d{2}\s\d{2}:\d{2}:\d{2}\s(?<hostname>\S+)" | rex "\suser\s(?<User>[^\s]+)\s" | search User="root" | stats count as "Root Activity Count" by hostname
+
+Splunk Search for Most active linux hosts
+sourcetype=linux_secure | rex "\w{3}\s\d{2}\s\d{2}:\d{2}:\d{2}\s(?<hostname>\S+)" | top limit=10 hostname
+
+Splunk Search for Unique Linux Hosts Reporting Linux Secure
+sourcetype=linux_secure | rex "\w{3}\s\d{2}\s\d{2}:\d{2}:\d{2}\s(?<hostname>\S+)" | stats dc(hostname) as "Unique Hosts"
+
+Splunk Search for Events per linux host
+sourcetype=linux_secure | rex "\w{3}\s\d{2}\s\d{2}:\d{2}:\d{2}\s(?<hostname>\S+)" | stats count by hostname
+
+Detection surface for any security-aware data source
+
+| tstats count where index=any TERM(exploit) by index, sourcetype, _time span=1d | eval matches="exploit"
+
+| append [ | tstats count where index=any TERM(malware) by index, sourcetype, _time span=1d | eval matches="malware" ]
+| append [ | tstats count where index=any TERM(virus) by index, sourcetype, _time span=1d | eval matches="virus" ]
+| append [ | tstats count where index=any TERM(attack)  by index, sourcetype, _time span=1d | eval matches="attack" ]
+| append [ | tstats count where index=any TERM(brute) by index, sourcetype, _time span=1d | eval matches="brute" ]
+| append [ | tstats count where index=any TERM(alert) by index, sourcetype, _time span=1d | eval matches="alert" ]
+| append [ | tstats count where index=any TERM(violation) by index, sourcetype, _time span=1d | eval matches="violation" ]
+| append [ | tstats count where index=any TERM(critical) by index, sourcetype, _time span=1d | eval matches="critical" ]
+| append [ | tstats count where index=any TERM(detected) by index, sourcetype, _time span=1d | eval matches="detected" ]
+| append [ | tstats count where index=any TERM(botnet) by index, sourcetype, _time span=1d | eval matches="botnet" ]
+| append [ | tstats count where index=any TERM(risk) by index, sourcetype, _time span=1d | eval matches="risk" ]
+
+| stats sparkline, sum(count) AS event_count, values(matches) AS macthes by index, sourcetype

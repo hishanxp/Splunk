@@ -1,0 +1,64 @@
+
+https://opstune.com/2020/09/16/tracking-rare-http-agent-context-rich-alerts-splunk/
+Here are the main queries showcased here:
+
+Profile Search
+
+| tstats summariesonly=1 dc(Web.src) AS daily_src_count,
+FROM datamodel=Web WHERE nodename=Web.Proxy
+BY Web.http_user_agent, _time span=1d
+
+| rename Web.* AS *
+
+| stats dc(_time) AS days_seen, median(daily_src_count) AS med_daily_src_count, min(_time) AS first_day, max(_time) AS last_day
+BY http_user_agent
+
+| eval _comment="Quick flag for easier lookup - adjust to your environment"
+| eval prevalent=if(days_seen>20 AND (med_daily_src_count>50), 1, 0)
+
+| outputlookup override_if_empty=0 http_user_agent_profile.csv
+Detection / Cluster Analytics Search
+
+| tstats summariesonly=1 count,
+values(Web.url) AS url,
+values(Web.src) AS src,
+FROM datamodel=Web
+WHERE nodename=Web.Proxy AND NOT [ | inputlookup exceptions.csv | rename * AS Web.* ]
+BY Web.http_user_agent
+
+| rename Web.* AS *
+
+| inputlookup append=1 http_user_agent_profile.csv WHERE NOT [ | inputlookup exceptions.csv ]
+
+| eval _comment="Adjust t value to your environment"
+| cluster t=0.4 labelonly=1 showcount=0 field=http_user_agent
+| eventstats
+mode(http_user_agent) AS cluster_agent,
+dc(http_user_agent) AS cluster_members,
+avg(med_daily_src_count) AS cluster_clients,
+avg(days_seen) AS cluster_dseen
+BY cluster_label
+
+| eval _comment="From here on, we only proceed for newly observed agents (no profile matches, hence days_seen = null)"
+| lookup http_user_agent_profile.csv http_user_agent OUTPUT days_seen
+| where isnull(days_seen)
+
+| eval cluster_info=mvappend("Members count = ".cluster_members,
+"Prevalent agent = ".cluster_agent,
+"Daily clients (avg)= ".cluster_clients,
+"Days seen (avg) = ".cluster_dseen)
+| eval _comment="Here's where you determine the alert qualifiers, list goes on and on…"
+| eval qualifiers=if(cluster_members<10, mvappend(qualifiers, "- Likely NOT related to a usual, user/interactive browser"), qualifiers)
+| eval qualifiers=if(match(http_user_agent, "(?i)(powershell|curl|nikto)"), mvappend(qualifiers, "- Automated or suspicious activity"), qualifiers)
+
+| eval _comment="No qualifiers, no alert needed!"
+| where mvcount(qualifiers)>0
+
+| stats sum(count) AS result, values(url) AS url, values(src) AS src, values(cluster_info) AS cluster_info, values(qualifiers) As qualifiers
+BY http_user_agent
+
+| eval reason=mvappend("Alert qualifiers:", qualifiers)
+| eval _comment="Provide more context to analyst combining info from the profile lookup and cluster analytics"
+| eval note=mvappend("The new agent is part of a cluster with the following characteristics:", cluster_info)
+
+| fields - cluster_info, qualifiers
